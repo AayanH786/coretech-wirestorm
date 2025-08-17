@@ -1,7 +1,37 @@
-use std::thread;
-use std::sync::mpsc;
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::{io::Write, sync::{mpsc, Arc, Mutex}, thread};
+use std::net::TcpStream;
+
+pub struct Destinations {
+    clients: Arc<Mutex<Vec<TcpStream>>>,
+}
+
+impl Destinations {
+    pub fn new() -> Self {
+        Destinations {
+            clients: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    pub fn add(&self, client: TcpStream) {
+        let mut clients = match self.clients.lock() {
+            Ok(guard) => guard,
+            Err(e) => {
+                eprintln!("Failed to lock clients mutex: {}", e);
+                return;
+            }   
+        };
+        clients.push(client);
+    }
+
+    pub fn broadcast(&self, data: &[u8]) {
+        let mut clients = self.clients.lock().unwrap_or_else(|_| panic!("Failed to lock destinations"));
+        clients.retain_mut(|client| client.write_all(data).is_ok());
+    }
+
+    pub fn clone_inner(&self) -> Arc<Mutex<Vec<TcpStream>>> {
+        Arc::clone(&self.clients)
+    }
+}
 
 pub struct ThreadPool {
     // A vector to hold the workers in the pool

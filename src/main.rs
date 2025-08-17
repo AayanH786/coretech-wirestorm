@@ -1,91 +1,79 @@
-//see task 1 for explanations
-use std::{fs, io::{prelude::*, BufReader}, net::{TcpListener, TcpStream}, time::Duration};
-//import the threads module
-use std::thread;
+use std::{io::{prelude::*, BufReader}, net::{TcpListener, TcpStream}, sync::{Arc, Mutex}, thread};
 //import the threadpool module from my lib.rs file.
-use coretech_wirestorm::ThreadPool; 
+use coretech_wirestorm::{Destinations, ThreadPool}; 
 
 fn main() {
-    let listener = TcpListener::bind("127.0.0.1:33333").unwrap_or_else(|err| {
-        eprintln!("Failed to bind to address: {}", err);
-        std::process::exit(1);
-    });
-    // create a thread pool with 4 threads
-    let pool = ThreadPool::new(4); 
 
-    //listener.incoming returns an iterator over the incoming connections
-    //each stream represents an open connection between the server and a client
-        for stream in listener.incoming() {
-            match stream {
-                Ok(stream) => {
-                    //handle the connection in a thread from the pool if the stream is valid
-                    pool.execute(|| {
-                        handle_connection(stream);
-                    });
-                }
-                Err(e) => {
-                    eprintln!("Failed to accept connection: {e}");
-                }
+    let listener = TcpListener::bind("127.0.0.1:33333")
+    .unwrap_or_else(|e| {
+        panic!("Failed to bind to port 33333: {}", e);});
+
+    // create a thread pool with 4 threads
+    let pool = ThreadPool::new(2); 
+    let destinations = Destinations::new();
+    let dest_clone = destinations.clone_inner();
+
+
+    thread::spawn(move || {
+        let dest_listener = TcpListener::bind("127.0.0.1:44444")
+        .unwrap_or_else(|e| panic!("Failed to bind to port 44444: {e}"));
+
+    for stream in dest_listener.incoming() {
+        match stream {
+            Ok(stream) => {
+                eprintln!("New destination client connected");
+                dest_clone.lock().unwrap_or_else(|_| panic!("Failed to lock destinations mutex")).push(stream);
             }
+            Err(e) => eprintln!("Destination connection error: {e}"),
         }
+    }
+    });
+
+    let mut source_connected = false;
+    for stream in listener.incoming() {
+        match stream {
+            Ok(stream) => {
+                if source_connected {
+                    eprintln!("Source client already connected, ignoring new connection");
+                    continue;
+                }
+                source_connected = true;
+                eprintln!("New source client connected");
+                let dests_clone = destinations.clone_inner();
+                pool.execute(move || {
+                    handle_source_connection(stream, dests_clone);
+                });
+            }
+            Err(e) => eprintln!("Source connection error: {e}"),
+        }
+    }
 }
 
 //this function will handle incoming tcp connections
-fn handle_connection(mut stream: TcpStream) {
-    //create a new buffered reader that reads from the stream (doesnt consume it)
-    let buf_reader = BufReader::new(&stream);
+fn handle_source_connection(stream: TcpStream, destinations: Arc<Mutex<Vec<TcpStream>>>) {
+    let mut buf_reader = BufReader::new(&stream);
+    let mut buffer = Vec::new();
 
-    //read the first line of the http request, and it should contain the request method and path (for us, GET and /)
-    let request_line = match buf_reader.lines().next() {
-        //success, we can unwrap the line
-        Some(Ok(line)) => line,
-        //opened the connection but failed to read the line
-        Some(Err(e)) => {
-            eprintln!("Failed to read from connection {e}");
-            return;
+    loop {
+        match buf_reader.read_until(b'\n', &mut buffer) {
+            Ok(0) => {
+                eprintln!("Source client disconnected");
+                break; // connection closed
+            }
+            Ok(_) => {
+                let mut dests = destinations
+                .lock()
+                .unwrap_or_else(|_| panic!("Failed to lock destinations mutex"));
+
+                dests.retain_mut(|dest| dest.write_all(&buffer).is_ok());
+
+                buffer.clear();
+            }
+            Err(e) => {
+                eprintln!("Error reading from source client: {e}");
+                break; // exit on error
+            }
         }
-        //connection was closed before any data was received
-        None => {
-            eprintln!("Connection Closed before request was received");
-            return;
-        }
-    };
-
-    //check which path the request was for
-
-    let (filename, status_line) = match &request_line[..] {
-        //if root path, send the hello file
-        "GET / HTTP/1.1" => ("hello.html", "HTTP/1.1 200 OK"),
-        //if for the sleep subpath, simulate a long response
-        "GET /sleep HTTP/1.1" => {
-            thread::sleep(Duration::from_secs(5));
-            ("hello.html", "HTTP/1.1 200 OK")
-        }
-        //if for any other path, return a 404
-        _ => ("404.html", "HTTP/1.1 404 NOT FOUND"),
-
-    };
-    //try to read the webpage that was asked
-    let contents = match fs::read_to_string(filename) {
-        Ok(contents) => contents,
-        Err(e) => {
-            eprintln!("Failed to read {}: {}", filename, e);
-            return;
-        }
-    };
-    let length = contents.len();
-
-    //response will hold a successful message, and the contents of the html page
-    let response = format! (
-        "{status_line}\r\nContent-Length: {length}\r\n\r\n{contents}"
-    );
-
-    //try send the response, if the error returns true, send an error message
-    if let Err(e) = stream.write_all(response.as_bytes()) {
-        eprintln!("Failed to write to connection: {e}");
-    } else {
-        println!("Response sent successfully");
     }
-
-
+    eprintln!("Source client disconnected")
 }
