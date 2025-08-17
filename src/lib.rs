@@ -1,17 +1,20 @@
 use std::{io::Write, sync::{mpsc, Arc, Mutex}, thread};
 use std::net::TcpStream;
 
+// Holds all connected receiver clients
 pub struct Destinations {
     clients: Arc<Mutex<Vec<TcpStream>>>,
 }
 
 impl Destinations {
+    // Create a new Destinations instance
     pub fn new() -> Self {
         Destinations {
             clients: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
+    //adds a new receiver client
     pub fn add(&self, client: TcpStream) {
         let mut clients = match self.clients.lock() {
             Ok(guard) => guard,
@@ -23,6 +26,7 @@ impl Destinations {
         clients.push(client);
     }
 
+    //broadcast a message to all connected receiver clients
     pub fn broadcast(&self, data: &[u8]) {
         let mut clients = self.clients.lock().unwrap_or_else(|_| panic!("Failed to lock destinations"));
         clients.retain_mut(|client| client.write_all(data).is_ok());

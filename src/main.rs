@@ -3,68 +3,109 @@ use std::{io::{prelude::*, BufReader}, net::{TcpListener, TcpStream}, sync::{Arc
 use coretech_wirestorm::{Destinations, ThreadPool}; 
 
 fn main() {
-
+    // bind the TcpListener to the port, panic if failed to bind (due to being in use or other reason)
     let listener = TcpListener::bind("127.0.0.1:33333")
     .unwrap_or_else(|e| {
         panic!("Failed to bind to port 33333: {}", e);});
 
-    // create a thread pool with 4 threads
+    // create a thread pool with given size (2 for now) and 
     let pool = ThreadPool::new(2); 
+    //active_source holds the currently active transmitter connection.
+    let active_source = Arc::new(Mutex::new(None::<TcpStream>));
+    //holds all receivers to broadcast messages to.
     let destinations = Destinations::new();
+    //clone the inner vector of destinations to push into the thread.
     let dest_clone = destinations.clone_inner();
 
-
+    //create threads for destination clients. note that I currently don't check if a thread panics (do more research on concurrent to see if this can happen)
     thread::spawn(move || {
         let dest_listener = TcpListener::bind("127.0.0.1:44444")
         .unwrap_or_else(|e| panic!("Failed to bind to port 44444: {e}"));
 
+    //for each destination connection, add the new connection to the destinations vector so we know who is added
     for stream in dest_listener.incoming() {
         match stream {
+            //if the stream is ok, push it to the destinations
             Ok(stream) => {
                 eprintln!("New destination client connected");
-                dest_clone.lock().unwrap_or_else(|_| panic!("Failed to lock destinations mutex")).push(stream);
+                //unlock the destinations vector and add the new stream
+                dest_clone
+                .lock()
+                .unwrap_or_else(|_| panic!("Failed to lock destinations mutex"))
+                .push(stream);
             }
             Err(e) => eprintln!("Destination connection error: {e}"),
         }
     }
     });
 
-    let mut source_connected = false;
+    // check incoming transmitter connections and see if we already have one.
     for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => {
-                if source_connected {
+    match stream {
+        Ok(stream) => {
+            //grab the current receivers and the current active transmitter (shouldnt this be defined later?)
+            let dests_clone = destinations.clone_inner();
+            let active_clone = Arc::clone(&active_source);
+
+            // wrap the lock and checks in a scope so the borrow ends
+            {
+                //check if there is an active transmitter, if there is ignore the new one.
+                let mut active = active_clone
+                    .lock()
+                    .unwrap_or_else(|_| panic!("Failed to lock active_source mutex"));
+
+                //check if there is an active transmitter, if there is ignore the new one.
+                if active.is_some() {
                     eprintln!("Source client already connected, ignoring new connection");
                     continue;
                 }
-                source_connected = true;
-                eprintln!("New source client connected");
-                let dests_clone = destinations.clone_inner();
-                pool.execute(move || {
-                    handle_source_connection(stream, dests_clone);
-                });
+
+                //set the active transmitter to the new stream
+                *active = Some(
+                    stream
+                        .try_clone()
+                        .unwrap_or_else(|_| panic!("Failed to clone source stream")),
+                );
             }
-            Err(e) => eprintln!("Source connection error: {e}"),
+
+
+            //send the connection to the thread pool for handling
+            pool.execute(move || {
+                handle_source_connection(stream, dests_clone, active_clone);
+            });
         }
+        Err(e) => eprintln!("Source connection error: {e}"),
     }
 }
 
-//this function will handle incoming tcp connections
-fn handle_source_connection(stream: TcpStream, destinations: Arc<Mutex<Vec<TcpStream>>>) {
+}
+
+//this function will handle the transmitter
+fn handle_source_connection(
+    stream: TcpStream,
+    destinations: Arc<Mutex<Vec<TcpStream>>>,
+    active_source: Arc<Mutex<Option<TcpStream>>>,
+) {
+    //create a buffered reader for the stream, and a buffer
     let mut buf_reader = BufReader::new(&stream);
     let mut buffer = Vec::new();
 
+    //loop indefinitely
     loop {
+        //read a line into the buffer
         match buf_reader.read_until(b'\n', &mut buffer) {
+            //if we get 0 bytes, the connection is closed
             Ok(0) => {
                 eprintln!("Source client disconnected");
                 break; // connection closed
             }
+            //anything else read in can be sent to all receivers, in the order that they connected.
             Ok(_) => {
                 let mut dests = destinations
                 .lock()
                 .unwrap_or_else(|_| panic!("Failed to lock destinations mutex"));
 
+                //send the buffer to all connected receivers
                 dests.retain_mut(|dest| dest.write_all(&buffer).is_ok());
 
                 buffer.clear();
@@ -75,5 +116,11 @@ fn handle_source_connection(stream: TcpStream, destinations: Arc<Mutex<Vec<TcpSt
             }
         }
     }
+
+    // clear the active source when there is an error
+    let mut active = active_source
+        .lock()
+        .unwrap_or_else(|e| panic!("Failed to lock active source mutex: {e}"));
+    *active = None; // clear the active source when done
     eprintln!("Source client disconnected")
 }
