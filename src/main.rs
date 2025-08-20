@@ -91,60 +91,108 @@ fn handle_source_connection(
     destinations: Arc<Mutex<Vec<TcpStream>>>,
     active_source: Arc<Mutex<Option<TcpStream>>>,
 ) {
-    //create a buffered reader for the stream, and a buffer
     let mut buf_reader = BufReader::new(&stream);
     let mut header = [0u8; CTMP_HEADER_LEN];
 
-    //loop indefinitely
     loop {
-        //read a line into the buffer
+        // Read the fixed-size header
         if let Err(e) = buf_reader.read_exact(&mut header) {
             eprintln!("Failed to read header: {}", e);
             break;
         }
+        println!("Received header: {:?}", header);
 
+        // Validate magic byte
         if header[0] != CTMP_MAGIC_BYTE {
-            eprintln!("Invalid magic byte in header, closing source {:02X}", header[0]);
+            eprintln!("Invalid magic byte: {:02X}", header[0]);
             break;
         }
 
-        if header[1] != CTMP_PAD
-        || header[4] != CTMP_PAD
-        || header[5] != CTMP_PAD
-        || header[6] != CTMP_PAD
-        || header[7] != CTMP_PAD
-        {
-            eprintln!("Invalid padding in header, closing source");
+        // Extract fields
+        let options = header[1];
+        let sensitive = (options & 0x40) != 0; // bit 1
+        let length = u16::from_be_bytes([header[2], header[3]]) as usize;
+        let checksum_in_msg = u16::from_be_bytes([header[4], header[5]]);
+        let padding = &header[6..8];
+
+        // Validate padding
+        if padding != [CTMP_PAD, CTMP_PAD] {
+            eprintln!("Invalid padding in header");
             break;
         }
 
-        let length = u16::from_be_bytes([header[2],header[3]]) as usize;
+        // Validate length
         if length == 0 || length > CTMP_MAX_PAYLOAD_SIZE {
-            eprintln!("Invalid payload length: {length}, closing source");
+            eprintln!("Invalid payload length: {}", length);
             break;
         }
 
+        // Read payload
         let mut payload = vec![0u8; length];
         if let Err(e) = buf_reader.read_exact(&mut payload) {
             eprintln!("Failed to read payload: {}", e);
             break;
         }
 
+        // If sensitive, validate checksum
+        if sensitive {
+            let mut header_for_checksum = header.clone();
+            header_for_checksum[4] = 0xCC;
+            header_for_checksum[5] = 0xCC;
 
-        let mut frame = Vec::with_capacity(CTMP_HEADER_LEN + length);
-        frame.extend_from_slice(&header);
-        frame.extend_from_slice(&payload);
+            let mut sum: u32 = 0;
+            for chunk in header_for_checksum.chunks(2).chain(payload.chunks(2)) {
+                let val = if chunk.len() == 2 {
+                    u16::from_be_bytes([chunk[0], chunk[1]]) as u32
+                } else {
+                    (chunk[0] as u32) << 8
+                };
+                sum = sum.wrapping_add(val);
+            }
 
-        let mut dests = destinations
-            .lock()
-            .unwrap_or_else(|_| panic!("Failed to lock destinations mutex"));
-        dests.retain_mut(|dest| dest.write_all(&frame).is_ok());
+            while (sum >> 16) != 0 {
+                sum = (sum & 0xFFFF) + (sum >> 16);
+            }
+
+            let checksum_computed = !(sum as u16);
+            if checksum_computed != checksum_in_msg {
+                eprintln!("Invalid checksum for sensitive message, dropping");
+                continue;
+            } else {
+                // Build full frame for broadcast
+                let mut frame = Vec::with_capacity(CTMP_HEADER_LEN + length);
+                frame.extend_from_slice(&header);
+                frame.extend_from_slice(&payload);
+
+                // Broadcast to destinations
+                let mut dests = destinations
+                    .lock()
+                    .unwrap_or_else(|_| panic!("Failed to lock destinations mutex"));
+                dests.retain_mut(|dest| dest.write_all(&frame).is_ok());
+                eprintln!("broadcasted sensitive message")
+            }
+        } else {
+            // Build full frame for broadcast
+                let mut frame = Vec::with_capacity(CTMP_HEADER_LEN + length);
+                frame.extend_from_slice(&header);
+                frame.extend_from_slice(&payload);
+
+                // Broadcast to destinations
+                let mut dests = destinations
+                    .lock()
+                    .unwrap_or_else(|_| panic!("Failed to lock destinations mutex"));
+                dests.retain_mut(|dest| dest.write_all(&frame).is_ok());
+                eprintln!("broadcasted none sensitive message")
+        }
+
     }
 
-    // clear the active source when there is an error
+    // Clear active source when done
     let mut active = active_source
         .lock()
-        .unwrap_or_else(|e| panic!("Failed to lock active source mutex: {e}"));
-    *active = None; // clear the active source when done
-    eprintln!("Source client disconnected")
+        .unwrap_or_else(|_| panic!("Failed to lock active source mutex"));
+    *active = None;
+    eprintln!("Source client disconnected");
 }
+
+
