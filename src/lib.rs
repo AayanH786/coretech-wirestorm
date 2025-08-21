@@ -93,17 +93,7 @@ pub struct ThreadPool {
     // holds the sender end of the channel to send jobs to the workers
     sender: Option<mpsc::Sender<Job>>,
 }
-/// A thread pool for executing jobs concurrently.
-///
-/// The `ThreadPool` struct manages a fixed number of worker threads and a channel for sending jobs to them.
-/// It provides methods to create a new pool, execute jobs, and cleanly shut down all workers.
-///
-/// # Examples
-///
-/// ```rust
-/// let pool = ThreadPool::new(4);
-/// pool.execute(|| println!("Hello from a worker thread!"));
-/// ```
+
 type Job = Box<dyn FnOnce() + Send + 'static>;
 
 impl ThreadPool {
@@ -163,8 +153,6 @@ impl Drop for ThreadPool {
     fn drop(&mut self) {
         //take the sender out of the option, which will close the channel
         drop(self.sender.take()); 
-        //we want to shutdown all workers, which we do by waiting for the current threads to finish (without errors, unwrap)
-        //then these workers are dropped via the drain feature of vectors, the worker is removed from the pool.
         for worker in self.workers.drain(..) {
             println!("Shutting down worker {}", worker.id);
             if let Err(e) = worker.thread.join() {
@@ -173,25 +161,31 @@ impl Drop for ThreadPool {
         }
     }
 }
-//define a new data struture called worker, which represents a single worker in the pool
-struct Worker {
-    //id for debugging purposes
+/// Represents a single worker in the thread pool.
+///
+/// Each `Worker` has a unique ID and owns a thread that executes jobs received from the thread pool.
+pub struct Worker {
+    /// The worker's unique identifier (for debugging and management).
     id: usize,
-    //holds the thread that will be used
+    /// The thread handle for the worker's execution thread.
     thread: thread::JoinHandle<()>,
 }
-//worker methods
 impl Worker {
-    //create a new worker that holds a thread, the receiver is held within an arc and a mutex as seen earlier
+    /// Creates a new worker thread for the thread pool.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The worker's unique identifier.
+    /// * `receiver` - Shared receiver for job messages.
+    ///
+    /// # Returns
+    ///
+    /// A new `Worker` instance with its own thread.
     fn new(id: usize, receiver: Arc<Mutex<mpsc::Receiver<Job>>>) -> Worker {
         //create a thread using the thread::spawn function
         let thread = thread::spawn(move || {
-            //loop forever
             loop {
-                //the receiver passes in a job, this job is locked (to acquire the mutex)
-                //then we unwrap to check if there is an error with acquiring a lock
-                //then we call recv to get the job from the mutex.
-                //recv blocks the thread until a job is available, and mutex ensures only 1 worker tries to request a job.
+                
                 let message = match receiver.lock() {
                     Ok(guard) => guard.recv(),
                     Err(e) => {
@@ -200,22 +194,18 @@ impl Worker {
                     }
                 };
 
-                //check if we got a job or an error
                 match message {
-                    //if we got a clean job, we execute it
                     Ok(job) => {
                         println!("Worker {id} got a job; executing.");
                         job();
                     }
                     Err(_) => {
-                        //if we got an error, we print it
                         println!("Worker {id} got an error; shutting down.");
                         break;
                     }
                 }
             }
         });
-        //return the created worker
         Worker {id, thread}
     }
 }
@@ -236,18 +226,14 @@ pub fn validate_header(header: &[u8]) -> Result<(u16,bool), String> {
 
         // Validate magic byte
         if header[0] != CTMP_MAGIC_BYTE {
-            eprintln!("Invalid magic byte: {:02X}", header[0]);
             return Err("Invalid magic byte".into());
         }
 
-        // Extract fields
         let sensitive = (header[1] & 0x40) != 0; // bit 1
         let length = u16::from_be_bytes([header[2],header[3]]) as usize;
         println!("length: {}", length);
 
-        // Validate padding
         if header[6..8] != [CTMP_PAD, CTMP_PAD] {
-            eprintln!("Invalid padding in header");
             return Err("Invalid padding".into());
         }
 
@@ -255,9 +241,7 @@ pub fn validate_header(header: &[u8]) -> Result<(u16,bool), String> {
             return Err("Invalid Padding for non sensitive headers".into())
         }
 
-        // Validate length
         if length == 0 || length > CTMP_MAX_PAYLOAD_SIZE as usize {
-            eprintln!("Invalid payload length: {}", length);
             return Err(format!("Invalid payload length: {}", length));
         }
 
@@ -274,17 +258,14 @@ pub fn validate_header(header: &[u8]) -> Result<(u16,bool), String> {
 /// * `payload` - The message payload bytes.
 /// * `destinations` - Shared list of destination clients.
 pub fn broadcast_message(header: &[u8], payload: &[u8], destinations: Arc<Mutex<Vec<TcpStream>>>) {
-    // Build full frame for broadcast
     let mut frame = Vec::with_capacity(CTMP_HEADER_LEN + payload.len());
     frame.extend_from_slice(&header);
     frame.extend_from_slice(&payload);
 
-        // Broadcast to destinations
         let mut dests = destinations
                 .lock()
                 .unwrap_or_else(|_| panic!("Failed to lock destinations mutex"));
         dests.retain_mut(|dest| dest.write_all(&frame).is_ok());
-        eprintln!("broadcasted non-sensitive message")
 }
 
 /// Computes and verifies the checksum of a message.
@@ -329,7 +310,7 @@ pub fn verify_checksum(header: &[u8], payload: &[u8]) -> u16 {
     // Fold carry bits
     sum = (sum & 0xFFFF) + (sum >> 16);
 
-    // One's complement
+    // Convert to one's complement
     !(sum as u16)
 }
 

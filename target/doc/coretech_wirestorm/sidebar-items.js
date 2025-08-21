@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["broadcast_message","handle_transmitter","validate_header","verify_checksum"],"struct":["Destinations","ThreadPool"]};
+window.SIDEBAR_ITEMS = {"fn":["broadcast_message","handle_transmitter","validate_header","verify_checksum"],"struct":["Destinations","ThreadPool","Worker"]};
