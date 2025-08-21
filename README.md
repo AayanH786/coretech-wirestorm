@@ -34,11 +34,23 @@ This repository contains my solution for the CoreTech Security WIRE STORM challe
    ```
    - The server listens for source connections on `127.0.0.1:33333` and destination connections on `127.0.0.1:44444`.
 
+
 ## Usage and Validation
 - Connect a single source client to port 33333.
 - Connect one or more destination clients to port 44444.
 - Send CTMP messages from the source; valid messages are broadcast to all destinations in order.
-- Run the provided Python 3.12 tests (`python3 tests.py`) to verify protocol compliance and operational suitability.
+
+### How to Verify Your Solution with the Provided Tests
+1. Ensure your server is running (`cargo run --release`).
+2. Locate the provided Python test script (`tests.py`).
+3. Run the tests using Python 3.12:
+   ```sh
+   python3 tests.py
+   ```
+4. The tests will automatically connect to your server, send a variety of CTMP messages, and check the results.
+5. If all tests pass, you will see a success message. If any test fails, review the error output and adjust your implementation as needed.
+
+**Note:** No additional Python libraries are required. The tests are self-contained and designed for Ubuntu 24.04 LTS.
 
 ## Potential Limitations
 - Only one source client is allowed at a time; additional sources are rejected.
