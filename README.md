@@ -12,18 +12,6 @@ This repository contains my solution for the CoreTech Security WIRE STORM challe
 - Ensured messages are broadcast in order and invalid messages are dropped according to protocol rules.
 - Documented the code and provided clear build and usage instructions for operational validation.
 
-## Protocol Details
-
-The CoreTech Message Protocol (CTMP) is designed for large data transfers over TCP. Each message includes:
-- **MAGIC byte:** Always 0xCC
-- **OPTIONS byte:** Bit 1 indicates sensitive message
-- **LENGTH:** Network byte order, unsigned
-- **CHECKSUM:** 16-bit one's complement sum (for sensitive messages)
-- **PADDING:** As specified
-- **DATA:** The payload
-
-Sensitive messages (OPTIONS bit 1 set) require checksum validation. Invalid messages are dropped and logged.
-
 ## How to Build and Run (Ubuntu 24.04 LTS)
 
 1. **Install Rust:**

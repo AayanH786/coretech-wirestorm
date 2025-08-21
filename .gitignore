@@ -2,3 +2,4 @@
 /target/.rustc_info.json
 /target/.rustdoc_fingerprint.json
 /target/CACHEDIR.TAG
+/tests/__pycache__
