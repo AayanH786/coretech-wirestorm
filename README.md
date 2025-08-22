@@ -42,7 +42,7 @@ This repository contains my solution for the CoreTech Security WIRE STORM challe
 
 ### How to Verify Your Solution with the Provided Tests
 1. Ensure your server is running (`cargo run --release`).
-2. Locate the provided Python test script (`tests.py`).
+2. Open a new Terminal and locate the provided Python test script (`tests.py`).
 3. Run the tests using Python 3.12:
    ```sh
    python3 tests.py
@@ -58,9 +58,8 @@ This repository contains my solution for the CoreTech Security WIRE STORM challe
 - No persistent message storage; messages are relayed live only.
 - Uses threads for concurrency; async runtimes may scale better for very high connection counts.
 - Error logs are printed to stderr; no advanced logging or monitoring is included.
+- Graceful exit of server upon resolution.
+- Time out connected transmitter after an extended period of time with no activity.
 
 ## Challenge Context
 This project was developed for the CoreTech Security WIRE STORM graduate challenge. The solution is designed to be readable, efficient, and well-documented, meeting all requirements for operational validation and submission.
-
----
-For further details, see the original challenge text and protocol specification above.
